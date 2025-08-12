@@ -7,10 +7,7 @@ const EPS = 1e-9;
 export function parseExpression(expr) {
   if (!expr || typeof expr !== 'string') return [];
 
-  // Nettoyer et normaliser
   expr = expr.replace(/\s+/g, '');
-
-  // Si n'a pas de signe au début, ajoute '+'
   if (!expr.startsWith('-') && !expr.startsWith('+')) expr = '+' + expr;
 
   const terms = expr.match(/[+-][^+-]+/g) || [];
@@ -70,13 +67,12 @@ export function parseConstraints(constraints) {
 export function solveSimplex({ objective, constraints }) {
   const steps = [];
   try {
-    // validations simples
     if (!objective || !constraints || constraints.length === 0) {
       steps.push("Erreur: Données d'entrée invalides");
       return { status: 'invalid', message: "Données d'entrée invalides", steps };
     }
 
-    const isMax = objective.toLowerCase().includes('max');
+    let isMax = objective.toLowerCase().includes('max');
     const objExpr = objective.replace(/max|min|:/gi, '').trim();
     let objCoeffs = parseExpression(objExpr);
     const parsedCons = parseConstraints(constraints);
@@ -103,10 +99,23 @@ export function solveSimplex({ objective, constraints }) {
       }
     });
 
+    // garder une copie des coefficients originaux (pour calcul Z final si on convertit min->max)
+    const origObjCoeffs = objCoeffs.slice();
+
     steps.push(`Objectif: ${objective}`);
     steps.push(`Contraintes: ${constraints.join('; ')}`);
     steps.push(`Type: ${isMax ? 'MAX' : 'MIN'}`);
-    steps.push(`Coeffs objectif (orig): [${objCoeffs.join(', ')}]`);
+    steps.push(`Coeffs objectif (orig): [${origObjCoeffs.join(', ')}]`);
+
+    // --- IMPORTANT ---
+    // Pour éviter les confusions de signe en Phase 2, on convertit tout problème MIN en MAX
+    // en inversant les coefficients de l'objectif; on garde origObjCoeffs pour le calcul final de Z.
+    if (!isMax) {
+      objCoeffs = objCoeffs.map(v => -v);
+      isMax = true;
+      steps.push("Conversion MIN -> MAX (coefficients de l'objectif inversés pour le solveur interne).");
+      steps.push(`Coeffs objectif (après conversion): [${objCoeffs.join(', ')}]`);
+    }
 
     // construire indices pour colonnes supplémentaires (slack / artificielles)
     const extraByConstraint = parsedCons.map(c => c.sign === '<=' ? 1 : (c.sign === '>=' ? 2 : 1));
@@ -115,7 +124,7 @@ export function solveSimplex({ objective, constraints }) {
     const totalVars = numOriginal + totalExtra;
     const totalCols = totalVars + 1; // +1 pour RHS
 
-    // varNames (x1..xn) + we'll push s.. and a.. while mapping extras
+    // varNames (x1..xn) + we'll push s.. and a..
     const varNames = [];
     for (let i = 0; i < numOriginal; i++) varNames.push(`x${i+1}`);
 
@@ -156,17 +165,13 @@ export function solveSimplex({ objective, constraints }) {
       for (let k = 0; k < parsedCons.length; k++) {
         const map = mapping[k];
         if (map.slack !== null) {
-          // pour <= slack = +1, pour >= we stored slack but must set -1 in that column
           const sign = parsedCons[k].sign;
-          row[map.slack] = row[map.slack] || 0;
           if (i === k) {
             row[map.slack] = (sign === '<=') ? 1 : -1;
-          } else {
-            // déjà 0
           }
         }
         if (map.artificial !== null) {
-          row[map.artificial] = (i === k) ? 1 : (row[map.artificial] || 0);
+          if (i === k) row[map.artificial] = 1;
         }
       }
       row[row.length - 1] = parsedCons[i].rhs;
@@ -182,7 +187,6 @@ export function solveSimplex({ objective, constraints }) {
 
       // construire ligne phase1 comme - sum(lignes de base artificielles)
       const phase1Row = new Array(totalCols).fill(0);
-      // sommer toutes les lignes contenant une artificial = 1
       artificialCols.forEach(colIdx => {
         for (let r = 0; r < tableau.length; r++) {
           if (Math.abs(tableau[r][colIdx] - 1) < EPS) {
@@ -191,14 +195,12 @@ export function solveSimplex({ objective, constraints }) {
           }
         }
       });
-      // mettre signe négatif pour transformer en problème à maximiser (on va maximiser -sum(rows))
       for (let j = 0; j < phase1Row.length; j++) phase1Row[j] = -phase1Row[j];
 
       tableau.push(phase1Row);
       steps.push("Tableau Phase 1 initial:");
       steps.push(formatTableau(tableau, varNames));
 
-      // exécuter simplex (on maximise la ligne négative pour minimiser la somme)
       try {
         simplexIteration(tableau, true, steps, varNames);
       } catch (err) {
@@ -218,11 +220,9 @@ export function solveSimplex({ objective, constraints }) {
         return { status: 'infeasible', message: 'Problème infaisable (Phase 1 > 0)', steps };
       }
 
-      // Avant de supprimer les colonnes artificielles, s'assurer qu'aucune artificielle n'est basique.
-      // Si une artificielle est basique, essayer de pivoter pour la retirer de la base.
+      // tenter retirer artificielles basiques en pivotant si possible
       const artColsSorted = artificialCols.slice().sort((a,b) => b-a); // desc
       for (const artCol of artColsSorted) {
-        // trouver si artCol est basique
         let basicRow = -1;
         let oneCount = 0;
         for (let r = 0; r < tableau.length - 1; r++) {
@@ -236,7 +236,6 @@ export function solveSimplex({ objective, constraints }) {
           }
         }
         if (oneCount === 1 && basicRow !== -1) {
-          // tenter de trouver une colonne non-artificielle pour pivoter
           let foundCol = -1;
           for (let c = 0; c < tableau[0].length - 1; c++) {
             if (!artificialCols.includes(c) && Math.abs(tableau[basicRow][c]) > EPS) {
@@ -255,7 +254,7 @@ export function solveSimplex({ objective, constraints }) {
       // supprimer la ligne phase1 (la dernière ligne)
       tableau.pop();
 
-      // supprimer colonnes artificielles (descendant pour maintenir indices)
+      // supprimer colonnes artificielles (garder la RHS)
       const keepCols = [];
       for (let c = 0; c < tableau[0].length; c++) {
         if (!artificialCols.includes(c) || c === tableau[0].length - 1) keepCols.push(c);
@@ -266,13 +265,12 @@ export function solveSimplex({ objective, constraints }) {
         const newRow = keepCols.map(ci => tableau[r][ci]);
         newTableau.push(newRow);
       }
-      // mettre à jour varNames (on garde ceux qui ne sont pas artificiels)
       keepCols.forEach(ci => {
         if (ci < varNames.length) newVarNames.push(varNames[ci]);
       });
 
       tableau = newTableau;
-      // rewrite varNames
+      // rewrite varNames cleanly
       for (let i = 0; i < newVarNames.length; i++) { varNames[i] = newVarNames[i]; }
       varNames.length = newVarNames.length;
 
@@ -283,14 +281,12 @@ export function solveSimplex({ objective, constraints }) {
     // ---------------- PHASE 2 ----------------
     steps.push("=== PHASE 2: optimisation de l'objectif réel ===");
 
-    // construire ligne Z selon isMax
+    // construire ligne Z selon isMax (ici isMax est true, on a éventuellement converti un min->max)
     const numColsNow = tableau[0].length;
     const zRow = new Array(numColsNow).fill(0);
-    // assigner coefficients des x1..xn (original variables)
     for (let j = 0; j < numOriginal; j++) {
       zRow[j] = isMax ? -objCoeffs[j] : objCoeffs[j];
     }
-    // RHS initial 0 (zRow[last] already 0)
     tableau.push(zRow);
 
     // éliminer contributions des variables basiques sur la ligne Z
@@ -329,9 +325,9 @@ export function solveSimplex({ objective, constraints }) {
       }
     }
 
-    // calculer Z à partir de la solution (robuste)
+    // calculer Z à partir des coefficients originaux (avant conversion min->max)
     let zCalc = 0;
-    for (let i = 0; i < numOriginal; i++) zCalc += (objCoeffs[i] || 0) * (solution[`x${i+1}`] || 0);
+    for (let i = 0; i < numOriginal; i++) zCalc += (origObjCoeffs[i] || 0) * (solution[`x${i+1}`] || 0);
 
     steps.push("Solution extraite:");
     Object.keys(solution).forEach(k => steps.push(`${k} = ${solution[k].toFixed(6)}`));
@@ -360,7 +356,6 @@ function eliminateBasicVarsFromObjective(tableau, varNames) {
   const zRowIndex = tableau.length - 1;
   const numCols = tableau[0].length;
   for (let col = 0; col < Math.min(varNames.length, numCols - 1); col++) {
-    // repérer colonne basique
     let basicRow = -1;
     let oneFound = false;
     let isBasic = true;
@@ -389,7 +384,6 @@ function simplexIteration(tableau, isMax, steps = [], varNames = []) {
     // choisir colonne entrante
     let pivotCol = -1;
     if (isMax) {
-      // choisir la colonne la plus négative (coût réduit)
       let minVal = 0;
       for (let j = 0; j < zRow.length - 1; j++) {
         if (zRow[j] < minVal - EPS) { minVal = zRow[j]; pivotCol = j; }
@@ -399,7 +393,6 @@ function simplexIteration(tableau, isMax, steps = [], varNames = []) {
         break;
       }
     } else {
-      // minimisation: choisir la colonne la plus positive
       let maxVal = 0;
       for (let j = 0; j < zRow.length - 1; j++) {
         if (zRow[j] > maxVal + EPS) { maxVal = zRow[j]; pivotCol = j; }
