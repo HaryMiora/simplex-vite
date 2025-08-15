@@ -3,218 +3,142 @@ import ProblemInput from './components/ProblemInput';
 import SimplexTable from './components/SimplexTable';
 import Solution from './components/Solution';
 import MatrixView from './components/MatrixView';
+import { solveSimplex } from './simplex/solver'; // Assurez-vous que le chemin est correct
 // Import depuis la nouvelle structure modulaire
-import { solveSimplex } from './simplex/index';
 
-function App() {
-  const [result, setResult] = useState(null);
-  const [rawSteps, setRawSteps] = useState([]);
-  const [solutionValues, setSolutionValues] = useState([]);
-  const [zValue, setZValue] = useState(null);
-  const [status, setStatus] = useState(null);
+const App = () => {
+  const [problem, setProblem] = useState(null);
+  const [results, setResults] = useState(null);
+  // const [isCalculating, setIsCalculating] = useState(false);
 
-  const handleSolve = (problem) => {
+  // Fonction pour analyser l'entrée utilisateur et extraire les matrices
+  const parseInput = (problemData) => {
     try {
-      // Utilisation du solveur modulaire
-      const solverResult = solveSimplex(problem);
+      // Ici vous devez implémenter votre logique de parsing
+      // Exemple basique pour comprendre le format
+      const { constraints: _constraints } = problemData;
       
-      // Stocker le résultat complet
-      setResult(solverResult);
-      setStatus(solverResult.status);
-      setRawSteps(solverResult.steps || []);
-
-      // Traitement selon le statut
-      if (solverResult.status === 'optimal') {
-        // Extraction des valeurs des variables depuis l'objet solution
-        const solution = solverResult.solution || {};
-        const numVars = Object.keys(solution).length;
-        const vars = Array(numVars).fill(0).map((_, i) => {
-          const varName = `x${i + 1}`;
-          return solution[varName] || 0;
-        });
-
-        setSolutionValues(vars);
-        setZValue(solverResult.z || 0);
-      } else {
-        // Pour les cas non optimaux, réinitialiser
-        setSolutionValues([]);
-        setZValue(null);
-      }
-
+      // Parser la fonction objectif (ex: "MAX: 3x1 + 5x2")
+      // Parser les contraintes (ex: ["2x1 + 3x2 <= 8", "x1 + 2x2 <= 6"])
+      
+      // Retourner les matrices parsées
+      return {
+        A: [], // Matrice des coefficients
+        B: [], // Vecteur des constantes
+        C: [], // Coefficients de la fonction objectif
+        isMaximization: true
+      };
     } catch (error) {
-      console.error('Erreur lors de la résolution:', error);
-      setResult({
-        status: 'error',
-        message: error.message,
-        steps: [`Erreur: ${error.message}`]
-      });
-      setStatus('error');
-      setRawSteps([`Erreur: ${error.message}`]);
-      setSolutionValues([]);
-      setZValue(null);
+      console.error('Erreur de parsing:', error);
+      return null;
     }
   };
 
-  const renderStatusBadge = () => {
-    if (!status) return null;
+  // Votre algorithme du simplex
+  // (Utilisez la fonction importée solveSimplex depuis './simplex/solver')
 
-    const statusConfig = {
-      optimal: { class: 'success', text: 'Solution Optimale' },
-      infeasible: { class: 'danger', text: 'Problème Infaisable' },
-      unbounded: { class: 'warning', text: 'Solution Non Bornée' },
-      invalid: { class: 'secondary', text: 'Données Invalides' },
-      error: { class: 'danger', text: 'Erreur' }
-    };
-
-    const config = statusConfig[status] || { class: 'secondary', text: status };
-
-    return (
-      <div className={`alert alert-${config.class} mb-3`}>
-        <strong>Statut: </strong>{config.text}
-        {result?.message && <div className="mt-2"><em>{result.message}</em></div>}
-      </div>
-    );
-  };
-
-  const renderSteps = () => {
-    if (!rawSteps.length) return null;
-
-    return rawSteps.map((step, i) => {
-      // Détection des tableaux (contiennent des tabulations)
-      if (step.includes('\t')) {
-        const lines = step.split('\n');
-        const title = lines[0];
-        const tableLines = lines.slice(1).filter(line => line.trim());
-        
-        if (tableLines.length > 0) {
-          try {
-            // Parser le tableau
-            const headers = tableLines[0].split('\t');
-            const matrix = tableLines.slice(1).map(line => 
-              line.split('\t').map(val => {
-                const num = parseFloat(val);
-                return isNaN(num) ? val : num;
-              })
-            );
-            
-            return (
-              <SimplexTable 
-                key={i} 
-                matrix={matrix} 
-                headers={headers}
-                title={title} 
-              />
-            );
-          } catch {
-            // Si parsing échoue, afficher comme texte
-            return (
-              <div key={i} className="alert alert-secondary">
-                <pre className="m-0">{step}</pre>
-              </div>
-            );
-          }
-        }
-      }
-      
-      // Étapes textuelles normales
-      return (
-        <div key={i} className="alert alert-info">
-          <pre className="m-0 text-wrap">{step}</pre>
-        </div>
-      );
-    });
+  const handleSolve = (problemData) => {
+    setProblem(problemData);
+    
+    // Parser l'entrée
+    const parsed = parseInput(problemData);
+    if (!parsed) {
+      alert('Erreur dans le format du problème');
+      return;
+    }
+    
+    // Résoudre avec votre algorithme
+    const result = solveSimplex(parsed.A, parsed.B, parsed.C, parsed.isMaximization);
+    setResults(result);
   };
 
   return (
-    <div className="container py-4">
-      <h1 className="text-center text-primary mb-4">
-        <i className="fas fa-calculator me-2"></i>
-        Algorithme du Simplexe
-      </h1>
-      
-      <div className="row">
-        <div className="col-12">
-          <ProblemInput onSolve={handleSolve} />
-        </div>
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-slate-100 py-8">
+      <div className="max-w-6xl mx-auto px-4">
+        <header className="text-center mb-12">
+          <h1 className="text-4xl font-bold text-gray-800 mb-4">
+            Solveur Simplex
+          </h1>
+          <p className="text-gray-600 text-lg">
+            Interface moderne pour la résolution de problèmes d'optimisation linéaire
+          </p>
+        </header>
+
+        <ProblemInput onSolve={handleSolve} />
+        
+        {/* Indicateur de calcul */}
+        {/* {isCalculating && (
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-8 text-center">
+            <div className="inline-flex items-center gap-2">
+              <div className="animate-spin rounded-full h-4 w-4 border-2 border-blue-500 border-t-transparent"></div>
+              <span className="text-blue-700 font-medium">Calcul en cours...</span>
+            </div>
+          </div>
+        )} */}
+        
+        {/* Affichage du problème saisi */}
+        {problem && (
+          <div className="bg-white rounded-xl shadow-lg border border-gray-200 p-6 mb-8">
+            <h3 className="text-xl font-bold text-gray-800 mb-4">Problème saisi :</h3>
+            <div className="bg-gray-50 rounded-lg p-4">
+              <p className="text-gray-800"><strong>Objectif :</strong> {problem.objective}</p>
+              <div className="mt-2">
+                <strong className="text-gray-800">Contraintes :</strong>
+                <ul className="mt-1 space-y-1">
+                  {problem.constraints.map((constraint, i) => (
+                    <li key={i} className="text-gray-700">• {constraint}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Affichage des résultats calculés */}
+        {results && results.success && (
+          <>
+            {/* Matrices du système original */}
+            <MatrixView 
+              A={results.solution.matrices.A} 
+              B={results.solution.matrices.B} 
+              title="Matrices du système"
+            />
+            
+            {/* Tableau(x) du Simplex - Itérations */}
+            {results.solution.iterations && results.solution.iterations.map((table, index) => (
+              <SimplexTable 
+                key={index}
+                matrix={table} 
+                title={`Table du Simplex - Itération ${index + 1}`}
+              />
+            ))}
+            
+            {/* Tableau final */}
+            {results.solution.finalTable && (
+              <SimplexTable 
+                matrix={results.solution.finalTable} 
+                title="Tableau Final du Simplex"
+              />
+            )}
+            
+            {/* Solution optimale */}
+            <Solution 
+              values={results.solution.variables} 
+              z={results.solution.objectiveValue}
+            />
+          </>
+        )}
+
+        {/* Gestion des erreurs */}
+        {results && !results.success && (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-6 mb-8">
+            <h3 className="text-lg font-bold text-red-800 mb-2">Erreur de calcul</h3>
+            <p className="text-red-700">{results.error}</p>
+          </div>
+        )}
       </div>
-
-      {/* Affichage du statut */}
-      {status && (
-        <div className="row mt-4">
-          <div className="col-12">
-            {renderStatusBadge()}
-          </div>
-        </div>
-      )}
-
-      {/* Affichage de la solution optimale */}
-      {status === 'optimal' && solutionValues.length > 0 && zValue !== null && (
-        <div className="row mt-3">
-          <div className="col-12">
-            <Solution values={solutionValues} z={zValue} />
-          </div>
-        </div>
-      )}
-
-      {/* Affichage des étapes détaillées */}
-      {rawSteps.length > 0 && (
-        <div className="row mt-4">
-          <div className="col-12">
-            <div className="card">
-              <div className="card-header bg-success text-white">
-                <h5 className="mb-0">
-                  <i className="fas fa-list-ol me-2"></i>
-                  Étapes détaillées de la résolution
-                </h5>
-              </div>
-              <div className="card-body">
-                {renderSteps()}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Tableau final (optionnel) */}
-      {result?.tableau && status === 'optimal' && (
-        <div className="row mt-4">
-          <div className="col-12">
-            <div className="card">
-              <div className="card-header bg-primary text-white">
-                <h5 className="mb-0">
-                  <i className="fas fa-table me-2"></i>
-                  Tableau final
-                </h5>
-              </div>
-              <div className="card-body">
-                <MatrixView 
-                  matrix={result.tableau} 
-                  varNames={result.varNames}
-                  title="Tableau optimal"
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Informations de debug (en développement) */}
-      {import.meta.env.MODE === 'development' && result && (
-        <div className="row mt-4">
-          <div className="col-12">
-            <details className="border rounded p-3">
-              <summary className="text-muted mb-2">
-                <small>Informations de debug (développement)</small>
-              </summary>
-              <pre className="text-muted small">
-                {JSON.stringify(result, null, 2)}
-              </pre>
-            </details>
-          </div>
-        </div>
-      )}
     </div>
   );
-}
+};
 
 export default App;
